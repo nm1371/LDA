@@ -1,194 +1,92 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+from skimage import data
+from scipy.sparse import identity
 
-# C extensions
-*.so
+# 1️⃣ بارگذاری تصویر Cameraman
+image_original = data.camera()
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# 2️⃣ تبدیل تصویر به بردار
+x = image_original.flatten()
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# 3️⃣ افزودن نویز گاوسی ۵۰٪
+mean = 0
+std = np.std(image_original) * 0.5
+noise = np.random.normal(mean, std, image_original.shape)
+image_noisy = np.clip(image_original + noise, 0, 255).astype(np.uint8)
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# 4️⃣ تبدیل تصویر نویزی به بردار
+x_noisy = image_noisy.flatten()
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+from skimage import data, transform
 
-# Translations
-*.mo
-*.pot
+# 📌 1. بارگذاری و کاهش اندازه تصویر
+image_original = data.camera()
+image_original = transform.resize(image_original, (128, 128), anti_aliasing=True)
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+# 📌 2. افزودن نویز گاوسی
+noise_std = 0.1  # تنظیم شدت نویز
+image_noisy = np.clip(image_original + noise_std * np.random.randn(*image_original.shape), 0, 1)
 
-# Flask stuff:
-instance/
-.webassets-cache
+# 📌 3. تبدیل به Tensor
+x_noisy = torch.tensor(image_noisy, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+x_original = torch.tensor(image_original, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
-# Scrapy stuff:
-.scrapy
+# 📌 4. مدل CNN ساده برای حذف نویز
+class DenoisingCNN(nn.Module):
+    def __init__(self):
+        super(DenoisingCNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)
 
-# Sphinx documentation
-docs/_build/
+    def forward(self, x):
+        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.conv2(x))
+        x = self.conv3(x)
+        return x
 
-# PyBuilder
-.pybuilder/
-target/
+# 📌 5. مقداردهی مدل
+model = DenoisingCNN()
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+loss_fn = nn.MSELoss()
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# 🎯 6. آموزش مدل به صورت دوسطحی
+for epoch in range(150):
+    optimizer.zero_grad()
 
-# IPython
-profile_default/
-ipython_config.py
+    x_denoised = model(x_noisy)
+    loss = loss_fn(x_denoised, x_original)
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+    loss.backward()
+    optimizer.step()
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+    if epoch % 30 == 0:
+        print(f"Epoch {epoch}: Loss = {loss.item():.4f}")
 
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
+# 📊 7. نمایش تصویر حذف نویز شده
+x_clean_final = model(x_noisy).detach().squeeze().numpy()
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 3, 1)
+plt.title("Original")
+plt.imshow(image_original, cmap='gray')
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
+plt.subplot(1, 3, 2)
+plt.title("Noisy")
+plt.imshow(image_noisy, cmap='gray')
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+plt.subplot(1, 3, 3)
+plt.title("Denoised")
+plt.imshow(x_clean_final, cmap='gray')
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+plt.show()
 
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the enitre vscode folder
-# .vscode/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
-.cursorignore
-.cursorindexingignore
