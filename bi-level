@@ -1,0 +1,95 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+from skimage import data, transform
+
+# 📌 1. بارگذاری تصویر و افزودن نویز
+image_original = data.camera()
+image_original = transform.resize(image_original, (128, 128), anti_aliasing=True)
+noise_std = 0.1
+image_noisy = np.clip(image_original + noise_std * np.random.randn(*image_original.shape), 0, 1)
+
+# 📌 2. تبدیل به Tensor
+x_noisy = torch.tensor(image_noisy.flatten(), dtype=torch.float32)
+x_original = torch.tensor(image_original.flatten(), dtype=torch.float32)
+
+# 📌 3. تعریف شبکه عصبی پیچشی (CNN) برای حذف نویز
+class DenoisingCNN(nn.Module):
+    def __init__(self):
+        super(DenoisingCNN, self).__init__()
+        self.conv1 = nn.Conv1d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(32, 32, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(32, 32, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv1d(32, 1, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x = x.unsqueeze(0).unsqueeze(0)
+        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.conv2(x))
+        x = torch.relu(self.conv3(x))
+        x = self.conv4(x)
+        return x.squeeze(0).squeeze(0)
+
+model = DenoisingCNN()
+model.train()
+
+# 📌 4. الگوریتم سطح پایین
+def learnable_descent_algorithm(x0, b, A, model, alpha=0.01, tau=0.001, K=15):
+    x = x0.clone().detach().requires_grad_(True)
+
+    for k in range(K):
+        grad_f = 2 * torch.matmul(A.T, (torch.matmul(A, x) - b))
+        z = x - alpha * grad_f
+        grad_r = torch.autograd.grad(torch.norm(model(z)), z, create_graph=True)[0]
+
+        x_next = z - tau * grad_r
+        x = x_next.detach().requires_grad_(True)
+
+    return x
+
+# 📌 5. الگوریتم دوسطحی
+def bi_level_optimization(A, b, model, params, theta_initial, learning_rate, max_iterations):
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    x = theta_initial.clone()
+
+    for iteration in range(max_iterations):
+        x_opt = learnable_descent_algorithm(x0=x, b=b, A=A, model=model, alpha=params['alpha'], tau=params['tau'], K=params['K'])
+
+        optimizer.zero_grad()
+        loss = torch.norm(torch.matmul(A, x_opt) - b) ** 2
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        x = x_opt.detach()
+
+    return x_opt, model
+
+# 📌 6. اجرای بهینه‌سازی دوسطحی روی تصویر
+A = torch.eye(len(x_noisy), dtype=torch.float32)
+b = x_noisy
+params = {'alpha': 0.01, 'tau': 0.001, 'K': 15}
+theta_initial = torch.zeros_like(x_noisy)
+learning_rate = 1e-4
+max_iterations = 100
+
+x_denoised, trained_model = bi_level_optimization(A, b, model, params, theta_initial, learning_rate, max_iterations)
+
+# 📊 7. نمایش تصویر حذف نویز شده
+x_clean_final = x_denoised.detach().numpy().reshape(image_original.shape)
+
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 3, 1)
+plt.title("Original")
+plt.imshow(image_original, cmap='gray')
+
+plt.subplot(1, 3, 2)
+plt.title("Noisy")
+plt.imshow(image_noisy, cmap='gray')
+
+plt.subplot(1, 3, 3)
+plt.title("Denoised (Bi-level)")
+plt.imshow(x_clean_final, cmap='gray')
+
+plt.show()
