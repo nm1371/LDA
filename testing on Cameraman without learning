@@ -1,0 +1,127 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage import data, img_as_float
+from skimage.util import random_noise
+from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import structural_similarity as ssim
+
+# 🧠 فعال‌سازی قطعه‌ای
+class PiecewiseActivation(nn.Module):
+    def __init__(self, delta=0.01):
+        super().__init__()
+        self.delta = delta
+
+    def forward(self, x):
+        delta = self.delta
+        mask1 = x <= -delta
+        mask2 = (x > -delta) & (x <= delta)
+        mask3 = x > delta
+        out = torch.zeros_like(x)
+        out[mask1] = 0
+        out[mask2] = 0.5 * x[mask2]**2 + 0.5 * delta**2
+        out[mask3] = x[mask3]
+        return out
+
+# 🔧 ساختار شبکه طبق مقاله
+class GNetwork(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.activation = PiecewiseActivation()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.conv4 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+
+    def forward(self, x):
+        h1 = self.activation(self.conv1(x))
+        h2 = self.activation(self.conv2(h1))
+        h3 = self.activation(self.conv3(h2))
+        h4 = self.activation(self.conv4(h3))
+        return h4
+
+# 📌 r_epsilon طبق مقاله
+def r_epsilon(x, g_net, epsilon=1e-2):
+    g = g_net(x)
+    norm = torch.norm(g, dim=1)  # [B, H, W]
+    reg = torch.zeros_like(norm)
+    reg[norm <= epsilon] = 0.5 / epsilon * norm[norm <= epsilon]**2
+    reg[norm > epsilon] = norm[norm > epsilon] - epsilon / 2
+    return reg.sum()
+
+# 🔄 الگوریتم LDA
+def LDA(x0, y, g_net, alpha=0.1, tau=0.1, gamma=0.5,
+        epsilon0=1.0, sigma=0.01, epsilon_tol=1e-6, max_iter=15):
+
+    x = x0.clone().detach().requires_grad_()
+    epsilon = epsilon0
+
+    for _ in range(max_iter):
+        grad_f = 2 * (x - y)
+        z = x - alpha * grad_f
+
+        ru = r_epsilon(z, g_net, epsilon)
+        rv = r_epsilon(x, g_net, epsilon)
+
+        grad_ru = torch.autograd.grad(ru, z, retain_graph=True)[0]
+        grad_rv = torch.autograd.grad(rv, x, retain_graph=True)[0]
+
+        u = z - tau * grad_ru
+        v = z - alpha * grad_rv
+
+        x_next = u if r_epsilon(u, g_net, epsilon) <= r_epsilon(v, g_net, epsilon) else v
+
+        grad_total = 2 * (x_next - y)
+        if torch.norm(grad_total) < sigma * gamma * epsilon:
+            epsilon *= gamma
+        if sigma * epsilon < epsilon_tol:
+            break
+
+        x = x_next.detach().requires_grad_()
+
+    return x.detach()
+
+# 🖼️ داده‌ها
+original_np = img_as_float(data.camera())
+noisy_np = random_noise(original_np, var=0.01)
+from skimage.transform import resize
+original_small = resize(original_np, (128, 128))
+noisy_small = random_noise(original_small, var=0.01)
+
+x_true = torch.tensor(original_np, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+x_noisy = torch.tensor(noisy_np, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+# 🚀 اجرا
+g_net = GNetwork()
+result = LDA(x_noisy, x_noisy, g_net)
+
+# 🎯 ارزیابی
+result_np = result.squeeze().numpy()
+psnr_noisy_val = psnr(original_np, noisy_np)
+psnr_result_val = psnr(original_np, result_np)
+ssim_result_val = ssim(original_np, result_np, data_range=1.0)
+
+print("🔸 PSNR نویزی:", psnr_noisy_val)
+print("🔹 PSNR بازسازی‌شده:", psnr_result_val)
+print("🔹 SSIM بازسازی‌شده:", ssim_result_val)
+
+# 📊 نمایش تصویری
+plt.figure(figsize=(15, 5))
+plt.subplot(1, 3, 1)
+plt.title("Original")
+plt.imshow(original_np, cmap='gray')
+plt.axis('off')
+
+plt.subplot(1, 3, 2)
+plt.title("Noisy")
+plt.imshow(noisy_np, cmap='gray')
+plt.axis('off')
+
+plt.subplot(1, 3, 3)
+plt.title("Denoised (Fixed g)")
+plt.imshow(result_np, cmap='gray')
+plt.axis('off')
+
+plt.tight_layout()
+plt.show()
